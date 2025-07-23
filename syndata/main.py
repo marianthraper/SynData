@@ -34,7 +34,7 @@ chroma_client = chromadb.PersistentClient(path=".cache/chroma")
 dataset_collection = chroma_client.get_or_create_collection(name="datasets")
 
 # Initialize Gemini AI
-GENAI_API_KEY = "AIzaSyDxJ9CS963OZw7a_g68R2zB5VzlgWG1tm8"  # Replace with your API key
+GENAI_API_KEY = "*"  # Replace with your API key
 genai.configure(api_key=GENAI_API_KEY)
 
 from scipy.stats import ks_2samp
