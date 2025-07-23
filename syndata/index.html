@@ -1,0 +1,519 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Synthetic Data Chatbot</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      text-align: center;
+      padding: 20px;
+    }
+
+    #chat-box {
+      width: 80%;
+      max-width: 700px;
+      margin: 20px auto;
+      border: 1px solid #ccc;
+      padding: 10px;
+      height: 300px;
+      overflow-y: auto;
+      text-align: left;
+    }
+
+    input, button, textarea {
+      padding: 10px;
+      margin: 10px;
+      font-size: 1em;
+    }
+
+    input[type="text"], input[type="number"], textarea {
+      width: 60%;
+    }
+
+    button {
+      cursor: pointer;
+    }
+
+    .hidden {
+      display: none;
+    }
+
+    #file-options, #rag-options, #constraints-form {
+      margin-top: 20px;
+    }
+
+    a {
+      display: inline-block;
+      margin-top: 10px;
+      font-weight: bold;
+    }
+
+    #download-link {
+      margin-top: 20px;
+    }
+
+    #stats-output {
+      margin-top: 20px;
+      text-align: left;
+      white-space: pre-wrap;
+      background-color: #f9f9f9;
+      padding: 10px;
+      border: 1px solid #ccc;
+      width: 80%;
+      max-width: 700px;
+      margin-left: auto;
+      margin-right: auto;
+    }
+
+    #constraints-form {
+      background-color: #f0f8ff;
+      padding: 15px;
+      border-radius: 5px;
+      width: 80%;
+      max-width: 700px;
+      margin-left: auto;
+      margin-right: auto;
+    }
+    
+    .loader {
+      border: 5px solid #f3f3f3;
+      border-top: 5px solid #3498db;
+      border-radius: 50%;
+      width: 30px;
+      height: 30px;
+      animation: spin 1s linear infinite;
+      margin: 10px auto;
+      display: none;
+    }
+    
+    @keyframes spin {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+  </style>
+</head>
+
+<body>
+
+  <h2>Synthetic Data Chatbot</h2>
+
+  <div id="chat-box"></div>
+  <input type="text" id="user-input" placeholder="Type your message...">
+  <button onclick="sendMessage()">Send</button>
+
+  <!-- File Upload Section -->
+  <div id="file-options" class="hidden">
+    <h3>Upload CSV for Synthetic Data</h3>
+    <input type="file" id="file-input"><br>
+    <input type="number" id="num-rows" placeholder="Enter number of rows"><br>
+    <button onclick="uploadFile()">Generate Data</button>
+    <div class="loader" id="file-loader"></div>
+  </div>
+
+  <!-- Column-Based Generation Section -->
+  <div id="rag-options" class="hidden">
+    <h3>Generate Data Without Upload</h3>
+    <input type="text" id="column-names" placeholder="Enter column names, comma-separated"><br>
+    <input type="number" id="num-rows-column" placeholder="Enter number of rows"><br>
+    <button onclick="generateWithoutFile()">Generate from RAG</button>
+    <div class="loader" id="rag-loader"></div>
+  </div>
+
+  <!-- Natural Language Constraints Form -->
+  <div id="constraints-form" class="hidden">
+    <h3>Set Data Constraints</h3>
+    <p>Enter your constraints in natural language. For example: "age between 20 and 60, salary above 30000"</p>
+    <textarea id="natural-constraints" rows="3" placeholder="Enter constraints in natural language or leave blank"></textarea><br>
+    <button id="submit-constraints">Apply Constraints</button>
+    <button id="skip-constraints">Skip Constraints</button>
+    <div class="loader" id="constraints-loader"></div>
+    
+    <!-- This will be populated after translation but hidden from user -->
+    <input type="hidden" id="json-constraints">
+  </div>
+
+  <!-- Download Link -->
+  <p id="download-link"></p>
+
+  <!-- Evaluation Section -->
+  <div id="evaluation">
+    <h3>Evaluate Synthetic Data</h3>
+    <input type="file" id="originalFile" />
+    <input type="file" id="syntheticFile" />
+    <button onclick="seeStats()">See Stats</button>
+    <div class="loader" id="eval-loader"></div>
+  </div>
+
+  <!-- Stats Output -->
+  <div id="stats-output"></div>
+
+  <!-- Main Script -->
+  <script>
+    // Store temporary filename, columns, and now row count
+    let tempFilename = "";
+    let dataColumns = [];
+    let currentRowCount = ""; // Added to store the number of rows
+    
+    async function sendMessage() {
+      let userInput = document.getElementById("user-input").value.trim();
+      if (!userInput) return;
+
+      let chatBox = document.getElementById("chat-box");
+
+      let userMessage = document.createElement("p");
+      userMessage.style.color = "blue";
+      userMessage.innerText = "You: " + userInput;
+      chatBox.appendChild(userMessage);
+
+      let botMessage = document.createElement("p");
+      botMessage.style.color = "green";
+      botMessage.innerText = "Bot: Thinking...";
+      chatBox.appendChild(botMessage);
+
+      try {
+        let response = await fetch("http://127.0.0.1:8000/chat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text: userInput })
+        });
+
+        let data = await response.json();
+        botMessage.innerText = "Bot: " + (data.response || "No response from server.");
+
+        // Show sections based on intent
+        if (userInput.toLowerCase().includes("generate data")) {
+          document.getElementById("file-options").classList.remove("hidden");
+          document.getElementById("rag-options").classList.remove("hidden");
+        }
+
+      } catch (error) {
+        botMessage.innerText = "Bot: Error generating data.";
+        console.error("Error:", error);
+      }
+
+      document.getElementById("user-input").value = "";
+      chatBox.scrollTop = chatBox.scrollHeight;
+    }
+
+    async function uploadFile() {
+      let fileInput = document.getElementById("file-input").files[0];
+      let numRows = document.getElementById("num-rows").value.trim();
+
+      if (!fileInput || !numRows) {
+        alert("Please select a file and enter the number of rows.");
+        return;
+      }
+
+      // Store row count globally
+      currentRowCount = numRows;
+
+      // Show loader
+      document.getElementById("file-loader").style.display = "block";
+
+      let formData = new FormData();
+      formData.append("file", fileInput);
+      console.log("Using num_rows for file upload:", numRows);
+      formData.append("num_samples", numRows);
+
+      try {
+        let response = await fetch("http://127.0.0.1:8000/generate", {
+          method: "POST",
+          body: formData
+        });
+
+        if (!response.ok) throw new Error("Server error: " + response.status);
+
+        let data = await response.json();
+        if (data.temp_file) {
+          // Store the temp filename and columns
+          tempFilename = data.temp_file;
+          dataColumns = data.columns;
+          
+          // Show constraints form
+          document.getElementById("constraints-form").classList.remove("hidden");
+          
+          // Set up constraint submit and skip buttons
+          document.getElementById("submit-constraints").onclick = processNaturalConstraints;
+          document.getElementById("skip-constraints").onclick = skipConstraints;
+          
+          // Add to chat log
+          let chatBox = document.getElementById("chat-box");
+          let message = document.createElement("p");
+          message.style.color = "green";
+          message.innerText = "Bot: Data generated successfully! You can now specify constraints in natural language or skip.";
+          chatBox.appendChild(message);
+          chatBox.scrollTop = chatBox.scrollHeight;
+        } else if (data.error) {
+          document.getElementById("download-link").innerText = "Error: " + data.error;
+        }
+
+      } catch (error) {
+        console.error("Upload Error:", error);
+        document.getElementById("download-link").innerText = "Error uploading file.";
+      } finally {
+        // Hide loader
+        document.getElementById("file-loader").style.display = "none";
+      }
+    }
+
+    async function generateWithoutFile() {
+      let columnNames = document.getElementById("column-names").value.trim();
+      let numRows = document.getElementById("num-rows-column").value.trim();
+
+      if (!columnNames || !numRows) {
+        alert("Please enter column names and the number of rows.");
+        return;
+      }
+
+      // Store row count globally
+      currentRowCount = numRows;
+
+      // Show loader
+      document.getElementById("rag-loader").style.display = "block";
+
+      let formData = new FormData();
+      formData.append("column_names", columnNames);
+      console.log("Using num_rows for column generation:", numRows);
+      formData.append("num_samples", numRows);
+
+      try {
+        let response = await fetch("http://127.0.0.1:8000/generate-with-columns", {
+          method: "POST",
+          body: formData
+        });
+
+        if (!response.ok) throw new Error("Server error: " + response.status);
+
+        let data = await response.json();
+        if (data.temp_file) {
+          // Store the temp filename and columns
+          tempFilename = data.temp_file;
+          dataColumns = data.columns;
+          
+          // Show constraints form
+          document.getElementById("constraints-form").classList.remove("hidden");
+          
+          // Set up constraint submit and skip buttons
+          document.getElementById("submit-constraints").onclick = processNaturalConstraints;
+          document.getElementById("skip-constraints").onclick = skipConstraints;
+          
+          // Add to chat log
+          let chatBox = document.getElementById("chat-box");
+          let message = document.createElement("p");
+          message.style.color = "green";
+          message.innerText = "Bot: Data generated successfully! You can now specify constraints in natural language or skip.";
+          chatBox.appendChild(message);
+          chatBox.scrollTop = chatBox.scrollHeight;
+        } else if (data.error) {
+          document.getElementById("download-link").innerText = "Error: " + data.error;
+        }
+
+      } catch (error) {
+        console.error("RAG Error:", error);
+        document.getElementById("download-link").innerText = "Error fetching synthetic data from RAG.";
+      } finally {
+        // Hide loader
+        document.getElementById("rag-loader").style.display = "none";
+      }
+    }
+    
+    async function processNaturalConstraints() {
+      let naturalConstraints = document.getElementById("natural-constraints").value.trim();
+      
+      if (!tempFilename) {
+        alert("No data file available. Please generate data first.");
+        return;
+      }
+      
+      // Show loader
+      document.getElementById("constraints-loader").style.display = "block";
+      
+      try {
+        // First, convert natural language to JSON constraints
+        const formData = new FormData();
+        formData.append("natural_constraints", naturalConstraints);
+        formData.append("columns", JSON.stringify(dataColumns));
+        
+        const response = await fetch("http://127.0.0.1:8000/process-natural-language-constraints", {
+          method: "POST",
+          body: formData
+        });
+        
+        if (!response.ok) throw new Error("Server error: " + response.status);
+        
+        const data = await response.json();
+        if (data.error) {
+          throw new Error(data.error);
+        }
+        
+        // Now submit the JSON constraints
+        const jsonConstraints = JSON.stringify(data.constraints_json);
+        
+        // Add to chat log
+        let chatBox = document.getElementById("chat-box");
+        let message = document.createElement("p");
+        message.style.color = "green";
+        
+        // Only log constraints if they were provided
+        if (naturalConstraints) {
+          message.innerText = "Bot: Converting your constraints: " + naturalConstraints;
+          chatBox.appendChild(message);
+          
+          // Show the JSON representation
+          let jsonMessage = document.createElement("p");
+          jsonMessage.style.color = "green";
+          jsonMessage.innerText = "Bot: Converted to: " + jsonConstraints;
+          chatBox.appendChild(jsonMessage);
+        } else {
+          message.innerText = "Bot: No constraints provided, proceeding with unfiltered data.";
+          chatBox.appendChild(message);
+        }
+        
+        // Submit the constraints for processing
+        await submitConstraints(jsonConstraints);
+        
+      } catch (error) {
+        console.error("Natural Language Constraints Error:", error);
+        
+        // Log error to chat
+        let chatBox = document.getElementById("chat-box");
+        let errorMessage = document.createElement("p");
+        errorMessage.style.color = "red";
+        errorMessage.innerText = "Bot: Error processing constraints: " + error.message;
+        chatBox.appendChild(errorMessage);
+        
+        document.getElementById("download-link").innerText = "Error processing constraints.";
+      } finally {
+        // Hide loader
+        document.getElementById("constraints-loader").style.display = "none";
+      }
+    }
+    
+    async function submitConstraints(constraintsJson) {
+      try {
+        const formData = new FormData();
+        formData.append('constraints', constraintsJson);
+        formData.append('filename', tempFilename);
+        
+        // Convert currentRowCount to an integer and ensure it's sent properly
+        const numRows = parseInt(currentRowCount);
+        if (isNaN(numRows)) {
+          throw new Error("Invalid number of samples");
+        }
+        
+        // Log for debugging
+        console.log("Sending constraints with num_samples:", numRows);
+        formData.append('num_samples', numRows);
+        
+        const response = await fetch('http://127.0.0.1:8000/submit-constraints', {
+            method: 'POST',
+            body: formData
+        });
+        
+        if (!response.ok) {
+            const errorText = await response.text();
+            throw new Error(`Server error: ${response.status} - ${errorText}`);
+        }
+        
+        const data = await response.json();
+        console.log("Server response:", data);
+        
+        // Set up download link - more robust handling of the response
+        const fileUrl = `http://127.0.0.1:8000${data.file_url}`;
+        
+        // Make download link very visible
+        document.getElementById("download-link").innerHTML = 
+          `<a href="${fileUrl}" download style="font-size: 18px; color: #0066cc; padding: 10px; background-color: #f0f0f0; border-radius: 5px;">Download Synthetic Data (With Constraints)</a>`;
+          
+        // Hide constraints form
+        document.getElementById("constraints-form").classList.add("hidden");
+        
+        // Log to chat
+        let chatBox = document.getElementById("chat-box");
+        let message = document.createElement("p");
+        message.style.color = "green";
+        message.innerText = "Bot: Constraints processed successfully. Download link created below.";
+        chatBox.appendChild(message);
+        chatBox.scrollTop = chatBox.scrollHeight;
+        
+        return data;
+      } catch (error) {
+        console.error('Submit Constraints Error:', error);
+        
+        // Make error visible in UI
+        document.getElementById("download-link").innerHTML = 
+          `<p style="color: red;">Error applying constraints: ${error.message}. Try using the original file instead.</p>
+           <a href="http://127.0.0.1:8000/download/${tempFilename}" download style="font-size: 16px;">Download Original Generated Data</a>`;
+        
+        throw error;
+      }
+    }
+    
+    function skipConstraints() {
+      // Skip constraints and provide direct download to the temporary file
+      if (tempFilename) {
+        const fileUrl = `http://127.0.0.1:8000/download/${tempFilename}`;
+        document.getElementById("constraints-form").classList.add("hidden");
+        document.getElementById("download-link").innerHTML = 
+          `<a href="${fileUrl}" download>Download Synthetic Data (No Constraints)</a>`;
+          
+        // Log to chat
+        let chatBox = document.getElementById("chat-box");
+        let message = document.createElement("p");
+        message.style.color = "green";
+        message.innerText = "Bot: Constraints skipped. You can download the unconstrained data.";
+        chatBox.appendChild(message);
+        chatBox.scrollTop = chatBox.scrollHeight;
+      } else {
+        alert("No data file available. Please generate data first.");
+      }
+    }
+
+    async function seeStats() {
+      const originalFileInput = document.getElementById("originalFile");
+      const syntheticFileInput = document.getElementById("syntheticFile");
+
+      if (!originalFileInput.files.length || !syntheticFileInput.files.length) {
+        alert("Please select both the original and synthetic files.");
+        return;
+      }
+      
+      // Show loader
+      document.getElementById("eval-loader").style.display = "block";
+
+      const formData = new FormData();
+      formData.append("original_file", originalFileInput.files[0]);
+      formData.append("synthetic_file", syntheticFileInput.files[0]);
+
+      try {
+        const response = await fetch("http://127.0.0.1:8000/evaluate-synthetic-data", {
+          method: "POST",
+          body: formData,
+        });
+
+        if (!response.ok) throw new Error("Stats fetch failed");
+
+        const result = await response.json();
+        const statsDiv = document.getElementById("stats-output");
+        statsDiv.innerHTML = `<pre>${JSON.stringify(result.comparison_results, null, 2)}</pre>`;
+        
+        // Log to chat
+        let chatBox = document.getElementById("chat-box");
+        let message = document.createElement("p");
+        message.style.color = "green";
+        message.innerText = "Bot: Evaluation completed. See statistics below.";
+        chatBox.appendChild(message);
+        chatBox.scrollTop = chatBox.scrollHeight;
+      } catch (err) {
+        console.error(err);
+        alert("Something went wrong: " + err.message);
+      } finally {
+        // Hide loader
+        document.getElementById("eval-loader").style.display = "none";
+      }
+    }
+  </script>
+</body>
+</html>
